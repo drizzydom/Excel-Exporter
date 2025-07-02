@@ -103,6 +103,84 @@ def extract_parts_and_maintenance(df):
     return parts
 
 
+def extract_maintenance_history(df):
+    """Extract maintenance history table and return historical maintenance records mapped to parts"""
+    historical_records = {}
+    
+    # Find the maintenance history table by looking for "Date" header around row 16-20
+    date_header_row = None
+    for row in range(15, min(25, df.shape[0])):
+        for col in range(0, min(5, df.shape[1])):
+            cell = str(df.iloc[row, col]).strip().lower()
+            if cell == 'date':
+                date_header_row = row
+                break
+        if date_header_row is not None:
+            break
+    
+    if date_header_row is None:
+        return historical_records
+    
+    # Get the part names and their maintenance types from the maintenance data header rows
+    part_names = {}
+    part_maintenance_types = {}
+    for col in range(4, df.shape[1]):  # Start from column E (index 4)
+        for row in range(5, min(15, df.shape[0])):  # Look in the maintenance section
+            cell = str(df.iloc[row, col]).strip()
+            field_name = str(df.iloc[row, 3]).strip().lower()
+            
+            if cell and cell.lower() != 'nan':
+                if 'maintenance done' in field_name:
+                    part_names[col] = cell
+                elif 'maintenance type' in field_name:
+                    part_maintenance_types[col] = cell
+    
+    # Extract data rows until we hit an empty row
+    for row in range(date_header_row + 1, df.shape[0]):
+        # Check if the row is entirely empty
+        row_data = []
+        is_empty_row = True
+        for col in range(df.shape[1]):
+            cell_value = df.iloc[row, col] if row < df.shape[0] and col < df.shape[1] else None
+            if not pd.isna(cell_value) and str(cell_value).strip():
+                is_empty_row = False
+            row_data.append(cell_value if not pd.isna(cell_value) else None)
+        
+        if is_empty_row:
+            break
+        
+        # Extract basic maintenance info
+        date_val = row_data[0] if len(row_data) > 0 else None
+        technician_val = row_data[1] if len(row_data) > 1 else None
+        work_order_val = row_data[2] if len(row_data) > 2 else None
+        po_number_val = row_data[3] if len(row_data) > 3 else None
+        
+        # Check each part column for completion
+        for col_idx, part_name in part_names.items():
+            if col_idx < len(row_data) and row_data[col_idx]:
+                completion_status = str(row_data[col_idx]).strip().lower()
+                if completion_status in ['yes', 'completed', 'y', 'true']:
+                    # Get the actual maintenance type for this part
+                    maintenance_type = part_maintenance_types.get(col_idx, 'Maintenance')
+                    
+                    # Create historical record for this part
+                    historical_record = {
+                        'Last PM Done': date_val,
+                        'Technician': technician_val,
+                        'Work Order': work_order_val,
+                        'Po Number': po_number_val,
+                        'Maintenance Type': maintenance_type,
+                        'Completion Status': completion_status
+                    }
+                    
+                    # Add to the part's historical records
+                    if part_name not in historical_records:
+                        historical_records[part_name] = []
+                    historical_records[part_name].append(historical_record)
+    
+    return historical_records
+
+
 def extract_vertical_machine_sheet(xls, sheet_name):
     df = pd.read_excel(xls, sheet_name=sheet_name, header=None)
     # Extract vertical fields as before
@@ -122,8 +200,22 @@ def extract_vertical_machine_sheet(xls, sheet_name):
                 break
         if not found:
             data[field] = None
+    
     # Extract parts and their maintenance
-    data['Parts'] = extract_parts_and_maintenance(df)
+    current_parts = extract_parts_and_maintenance(df)
+    
+    # Extract historical maintenance records mapped to parts
+    historical_records = extract_maintenance_history(df)
+    
+    # Add historical records to existing parts
+    for part in current_parts:
+        part_name = part['Part Name']
+        if part_name in historical_records:
+            # Add historical maintenance records to this part
+            part['Historical_Maintenance'] = historical_records[part_name]
+    
+    data['Parts'] = current_parts
+    
     return data
 
 
